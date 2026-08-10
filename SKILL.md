@@ -11,13 +11,15 @@ description: "将 Markdown 文件或内容转换为可编辑 DOCX，支持主题
 
 未指定样式参数时使用以下默认值：
 
-- 主题色：`classic-blue`，对应 `#2980B9`
+- 主题色：`gray-background`，页面浅灰底、文字黑色、图片与 Mermaid 保持彩色
 - 字体：宋体，DOCX 内部字体名为 `SimSun`
 - 正文字号：`12pt`
 - 标题字号：H1 `22pt`、H2 `18pt`、H3 `16pt`、H4 `14pt`、H5 `13pt`、H6 `12pt`
 - 页面：A4，标题映射为 Word 原生 `Heading 1` 至 `Heading 6`
 
 `--font-size` 仅表示正文基准字号。标题必须按层级相对放大，不能全部使用正文大小。
+
+`--cover` 使用 Markdown 首个一级标题生成封面，并附当前日期时间。`--toc` 会在封面下一页插入 Word 原生目录字段；使用 `--toc` 时自动包含封面。
 
 ## 依赖
 
@@ -42,7 +44,7 @@ python -m pip install 'Markdown>=3.6,<4' 'beautifulsoup4>=4.12,<5' 'Pillow>=10,<
 - LaTeX 图片渲染：安装 `matplotlib>=3.8,<4`。未安装或公式不兼容时，以 `Cambria Math` 保留 LaTeX 源文，不丢失内容。
 - Mermaid 图表：脚本依次检测全局 `mmdc`、`bunx --bun @mermaid-js/mermaid-cli`、`bunx --yes @mermaid-js/mermaid-cli`。
 - `bunx`/`npx` 首次使用可能下载 Mermaid CLI，需要网络访问，并可能耗时较长。
-- Mermaid CLI 需要 Chromium/Chrome。脚本会检测 `google-chrome`、`chromium` 或 `chromium-browser`。
+- Mermaid CLI 需要 Chromium/Chrome。脚本会检测 `google-chrome`、`chromium`、`chromium-browser`，并兼容 Windows 常见 Chrome/Edge 安装路径。
 - SVG 图片转 PNG 需要 `rsvg-convert`。
 
 不要创建单独的 requirements 文件；依赖以本技能文档为准。
@@ -51,7 +53,7 @@ python -m pip install 'Markdown>=3.6,<4' 'beautifulsoup4>=4.12,<5' 'Pillow>=10,<
 
 1. 确认输入是 Markdown 文件还是 Markdown 内容。二者必须且只能提供一个。
 2. 确认输出路径。默认文件输入会生成 `<源文件名>-转换版.docx`。
-3. 未收到样式要求时使用技能默认样式。
+3. 未收到样式要求时使用技能默认样式（默认 `gray-background`）。
 4. 文档包含 Mermaid 且用户要求图表必须呈现时，使用 `--mermaid required`；一般转换使用默认 `auto`。
 5. 执行转换并检查脚本输出的元素统计和警告。
 6. 验证 DOCX 容器与 OOXML；能够渲染时再检查页面视觉效果。
@@ -65,6 +67,16 @@ python -m pip install 'Markdown>=3.6,<4' 'beautifulsoup4>=4.12,<5' 'Pillow>=10,<
 python .agents/skills/md2docx/scripts/markdown_to_word.py \
   --markdown-file document.md \
   --output document.docx
+```
+
+添加封面和原生目录：
+
+```bash
+python .agents/skills/md2docx/scripts/markdown_to_word.py \
+  --markdown-file document.md \
+  --output document.docx \
+  --cover \
+  --toc
 ```
 
 要求所有 Mermaid 图必须渲染：
@@ -96,6 +108,17 @@ python .agents/skills/md2docx/scripts/markdown_to_word.py \
   --output output.docx
 ```
 
+灰底黑字、图片与 Mermaid 保持彩色：
+
+```bash
+python .agents/skills/md2docx/scripts/markdown_to_word.py \
+  --color gray-background \
+  --markdown-file document.md \
+  --output document.docx
+```
+
+`gray-background` 使用浅灰页面背景、黑色标题与正文、灰阶表格和代码样式；普通图片保留原图色彩，Mermaid 使用经典蓝彩色主题。
+
 主题色支持网站预设名或任意 `#RRGGBB`：
 
 - `traditional-black`
@@ -105,6 +128,7 @@ python .agents/skills/md2docx/scripts/markdown_to_word.py \
 - `corporate-orange`
 - `elegant-red`
 - `minimalist-gray`
+- `gray-background`
 - `creative-teal`
 
 ## Mermaid 模式

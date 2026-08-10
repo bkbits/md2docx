@@ -119,7 +119,7 @@ python scripts/markdown_to_word.py \
 
 默认样式：
 
-- 主题色：`classic-blue`，对应 `#2980B9`
+- 主题色：`gray-background`，页面浅灰底、文字黑色、图片与 Mermaid 保持彩色
 - 字体：`宋体`，DOCX 内部字体名为 `SimSun`
 - 正文基准字号：`12pt`
 - 页面：A4
@@ -134,9 +134,16 @@ python scripts/markdown_to_word.py \
 - `corporate-orange`
 - `elegant-red`
 - `minimalist-gray`
+- `gray-background`
 - `creative-teal`
 
 `--color` 也可以传入任意 `#RRGGBB` 颜色值。
+
+## 封面与目录
+
+- `--cover`：使用首个 Markdown 一级标题作为封面标题，并附当前日期时间。
+- `--toc`：在封面下一页插入 Word 原生 TOC 字段；使用时自动包含封面。
+- Word 打开文档时会请求更新目录；也可在目录上右键选择“更新域”。
 
 ## Mermaid 处理模式
 
@@ -158,11 +165,13 @@ from scripts.markdown_to_word import markdown_to_word
 result = markdown_to_word(
     markdown_file=Path('document.md'),
     output_path=Path('document.docx'),
-    color='classic-blue',
+    color='gray-background',
     font='宋体',
     font_size=12,
     mermaid_mode='auto',
     overwrite=True,
+    cover=True,
+    toc=True,
 )
 
 print(result.output_path)

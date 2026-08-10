@@ -31,6 +31,7 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Sequence, TypedDict, cast
@@ -40,7 +41,7 @@ try:
     from bs4 import BeautifulSoup, NavigableString, Tag
     from docx import Document
     from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
     from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -75,6 +76,7 @@ THEME_COLORS = {
     "corporate-orange": "E67E22",
     "elegant-red": "E74C3C",
     "minimalist-gray": "34495E",
+    "gray-background": "000000",
     "creative-teal": "1ABC9C",
 }
 
@@ -101,6 +103,11 @@ THEME_ALIASES = {
     "grey": "minimalist-gray",
     "minimalist gray": "minimalist-gray",
     "minimalistgray": "minimalist-gray",
+    "gray background": "gray-background",
+    "graybackground": "gray-background",
+    "grey background": "gray-background",
+    "greybackground": "gray-background",
+    "灰底黑字": "gray-background",
     "teal": "creative-teal",
     "creative teal": "creative-teal",
     "creativeteal": "creative-teal",
@@ -214,6 +221,25 @@ class MermaidRenderer:
 
         return None
 
+    @staticmethod
+    def _find_chrome() -> str | None:
+        for command in ("google-chrome", "chromium", "chromium-browser"):
+            executable = shutil.which(command)
+            if executable:
+                return executable
+        if os.name == "nt":
+            for candidate in (
+                Path(os.environ.get("PROGRAMFILES", ""))
+                / "Google/Chrome/Application/chrome.exe",
+                Path(os.environ.get("PROGRAMFILES(X86)", ""))
+                / "Google/Chrome/Application/chrome.exe",
+                Path(os.environ.get("PROGRAMFILES(X86)", ""))
+                / "Microsoft/Edge/Application/msedge.exe",
+            ):
+                if candidate.is_file():
+                    return str(candidate)
+        return None
+
     def _write_configs(self) -> None:
         light_color = blend_hex(self.color, "FFFFFF", 0.82)
         lighter_color = blend_hex(self.color, "FFFFFF", 0.92)
@@ -254,11 +280,7 @@ class MermaidRenderer:
             json.dumps(mermaid_config, ensure_ascii=False), encoding="utf-8"
         )
 
-        chrome = (
-            shutil.which("google-chrome")
-            or shutil.which("chromium")
-            or shutil.which("chromium-browser")
-        )
+        chrome = self._find_chrome()
         puppeteer_config: dict[str, object] = {
             "headless": True,
             "args": [
@@ -305,11 +327,7 @@ class MermaidRenderer:
             "-q",
         ]
         environment = os.environ.copy()
-        chrome = (
-            shutil.which("google-chrome")
-            or shutil.which("chromium")
-            or shutil.which("chromium-browser")
-        )
+        chrome = self._find_chrome()
         if chrome:
             environment["PUPPETEER_EXECUTABLE_PATH"] = chrome
             environment["PUPPETEER_SKIP_DOWNLOAD"] = "true"
@@ -400,11 +418,20 @@ class MarkdownDocxConverter:
         mermaid_mode: str,
         mermaid_timeout: int,
         download_images: bool,
+        gray_background: bool,
+        cover: bool,
+        toc: bool,
     ) -> None:
         self.markdown_text = markdown_text
         self.source_dir = source_dir
         self.output_path = output_path
         self.color = color
+        self.gray_background = gray_background
+        self.cover = cover
+        self.toc = toc
+        self.text_color = "000000" if gray_background else "1F2937"
+        self.page_color = "E7E6E6" if gray_background else None
+        self.table_header_color = "BFBFBF" if gray_background else color
         self.font = font
         self.font_size = font_size
         self.heading_sizes = {
@@ -429,12 +456,12 @@ class MarkdownDocxConverter:
         self.work_dir = Path(self._temporary_directory.name)
         self.mermaid = MermaidRenderer(
             self.work_dir,
-            color=color,
+            color="2980B9" if gray_background else color,
             font=font,
             mode=mermaid_mode,
             timeout_seconds=mermaid_timeout,
         )
-        self.formulas = FormulaRenderer(self.work_dir, color="1F2937")
+        self.formulas = FormulaRenderer(self.work_dir, color=self.text_color)
         self._configure_document()
 
     def close(self) -> None:
@@ -450,13 +477,15 @@ class MarkdownDocxConverter:
         section.right_margin = Inches(PAGE_MARGIN_INCHES)
         section.header_distance = Inches(0.3)
         section.footer_distance = Inches(0.3)
+        if self.page_color is not None:
+            set_document_background(self.document, self.page_color)
 
         zoom = self.document.settings.element.find(qn("w:zoom"))
         if zoom is not None:
             zoom.set(qn("w:percent"), "100")
 
         normal = cast(ParagraphStyle, self.document.styles["Normal"])
-        set_style_font(normal, self.font, self.font_size, "1F2937")
+        set_style_font(normal, self.font, self.font_size, self.text_color)
         normal.paragraph_format.space_after = Pt(max(4, self.font_size * 0.45))
         normal.paragraph_format.line_spacing = 1.35
 
@@ -483,7 +512,7 @@ class MarkdownDocxConverter:
                 style = cast(ParagraphStyle, self.document.styles[style_name])
             except KeyError:
                 continue
-            set_style_font(style, self.font, self.font_size, "1F2937")
+            set_style_font(style, self.font, self.font_size, self.text_color)
             style.paragraph_format.space_after = Pt(3)
             style.paragraph_format.line_spacing = 1.25
 
@@ -512,16 +541,75 @@ class MarkdownDocxConverter:
         soup = BeautifulSoup(rendered_html, "html.parser")
 
         first_h1 = soup.find("h1")
-        if first_h1:
-            title = first_h1.get_text(" ", strip=True)
-            self.document.core_properties.title = title
+        title = first_h1.get_text(" ", strip=True) if first_h1 else "未命名文档"
+        self.document.core_properties.title = title
 
-        for node in list(soup.contents):
+        if self.cover or self.toc:
+            self._render_cover(title)
+        if self.toc:
+            self._render_toc()
+
+        nodes = list(soup.contents)
+        if self.cover or self.toc:
+            for index, node in enumerate(nodes):
+                if node is first_h1:
+                    nodes.pop(index)
+                    break
+            for heading in soup.find_all(re.compile(r"h[2-6]")):
+                heading.name = f"h{int(heading.name[1]) - 1}"
+        for node in nodes:
             self._render_block(node)
 
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.document.save(str(self.output_path))
         return self.result
+
+    def _render_cover(self, title: str) -> None:
+        paragraph = self.document.add_paragraph()
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        paragraph.paragraph_format.space_before = Pt(210)
+        paragraph.paragraph_format.space_after = Pt(24)
+        run = paragraph.add_run(title)
+        apply_run_font(run, self.font, max(self.font_size + 16, 28), self.text_color)
+        run.bold = True
+
+        date_paragraph = self.document.add_paragraph()
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        date_paragraph.paragraph_format.space_after = Pt(0)
+        date_run = date_paragraph.add_run(
+            datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        )
+        apply_run_font(date_run, self.font, self.font_size + 1, self.text_color)
+        self._add_page_break()
+
+    def _render_toc(self) -> None:
+        heading = self.document.add_paragraph(style="Title")
+        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        heading.paragraph_format.space_after = Pt(18)
+        run = heading.add_run("目录")
+        apply_run_font(run, self.font, max(self.font_size + 6, 18), self.text_color)
+        run.bold = True
+
+        paragraph = self.document.add_paragraph()
+        field = OxmlElement("w:fldSimple")
+        field.set(qn("w:instr"), 'TOC \\o "1-6" \\h \\z \\u')
+        placeholder = OxmlElement("w:r")
+        text = OxmlElement("w:t")
+        text.text = "更新目录以显示标题"
+        placeholder.append(text)
+        field.append(placeholder)
+        paragraph._p.append(field)
+        self._add_page_break()
+
+        update_fields = self.document.settings.element.find(qn("w:updateFields"))
+        if update_fields is None:
+            update_fields = OxmlElement("w:updateFields")
+            self.document.settings.element.append(update_fields)
+        update_fields.set(qn("w:val"), "true")
+
+    def _add_page_break(self) -> None:
+        paragraph = self.document.add_paragraph()
+        paragraph.add_run().add_break(WD_BREAK.PAGE)
 
     def _render_block(self, node, *, quote: bool = False) -> None:
         if isinstance(node, NavigableString):
@@ -602,22 +690,36 @@ class MarkdownDocxConverter:
     def _render_list(self, node: Tag, depth: int, quote: bool = False) -> None:
         ordered = node.name.lower() == "ol"
         direct_items = node.find_all("li", recursive=False)
-        for item in direct_items:
-            style_depth = min(depth + 1, 3)
-            style_name = (
-                f"List Number{'' if style_depth == 1 else f' {style_depth}'}"
-                if ordered
-                else f"List Bullet{'' if style_depth == 1 else f' {style_depth}'}"
-            )
+        style_depth = min(depth + 1, 3)
+        style_name = (
+            f"List Number{'' if style_depth == 1 else f' {style_depth}'}"
+            if ordered
+            else f"List Bullet{'' if style_depth == 1 else f' {style_depth}'}"
+        )
+        raw_start = node.get("start")
+        try:
+            start = int(str(raw_start)) if ordered and raw_start is not None else 1
+        except ValueError:
+            start = 1
+        try:
+            num_id = self._new_numbering_instance(style_name, start) if ordered else None
+        except KeyError:
+            num_id = None
+
+        for item_index, item in enumerate(direct_items):
             try:
                 paragraph = self.document.add_paragraph(style=style_name)
+                if num_id is not None:
+                    num_pr = paragraph._p.get_or_add_pPr().get_or_add_numPr()
+                    num_pr.get_or_add_ilvl().val = 0
+                    num_pr.get_or_add_numId().val = num_id
             except KeyError:
                 paragraph = self.document.add_paragraph()
                 paragraph.paragraph_format.left_indent = Inches(0.25 * (depth + 1))
                 paragraph.paragraph_format.first_line_indent = Inches(-0.18)
                 self._add_text(
                     paragraph,
-                    f"{1 if ordered else '•'} ",
+                    f"{start + item_index}. " if ordered else "• ",
                     InlineStyle(bold=ordered),
                 )
             if quote:
@@ -646,6 +748,16 @@ class MarkdownDocxConverter:
 
             for nested in item.find_all(["ul", "ol"], recursive=False):
                 self._render_list(nested, depth=depth + 1, quote=quote)
+
+    def _new_numbering_instance(self, style_name: str, start: int) -> int:
+        style = cast(ParagraphStyle, self.document.styles[style_name])
+        style_num_id = int(style.element.pPr.numPr.numId.val)
+        numbering = self.document.part.numbering_part.element
+        base_num = numbering.num_having_numId(style_num_id)
+        abstract_num_id = int(base_num.abstractNumId.val)
+        num = numbering.add_num(abstract_num_id)
+        num.add_lvlOverride(ilvl=0).add_startOverride(start)
+        return int(num.numId)
 
     def _render_preformatted(self, node: Tag) -> None:
         code = node.find("code")
@@ -728,7 +840,11 @@ class MarkdownDocxConverter:
                     size=max(8, self.font_size - 1),
                     bold=token_style.get("bold", False),
                     italic=token_style.get("italic", False),
-                    color=token_style.get("color"),
+                    color=(
+                        self.text_color
+                        if self.gray_background
+                        else token_style.get("color")
+                    ),
                 )
                 self._add_text(paragraph, token_text, style)
             if not had_text:
@@ -778,10 +894,12 @@ class MarkdownDocxConverter:
                     if alignment is not None:
                         paragraph.alignment = alignment
                 if row_index == 0:
-                    set_cell_shading(cell, self.color)
+                    set_cell_shading(cell, self.table_header_color)
                     for run in paragraph.runs:
                         run.bold = True
-                        run.font.color.rgb = RGBColor(255, 255, 255)
+                        run.font.color.rgb = RGBColor.from_string(
+                            self.text_color if self.gray_background else "FFFFFF"
+                        )
                 elif row_index % 2 == 0:
                     set_cell_shading(cell, "F7F9FB")
 
@@ -888,7 +1006,11 @@ class MarkdownDocxConverter:
         run = paragraph.add_run(text)
         font_name = style.font or ("Consolas" if style.code else self.font)
         font_size = style.size if style.size is not None else self.font_size
-        font_color = style.color or "1F2937"
+        font_color = (
+            self.text_color
+            if self.gray_background
+            else style.color or self.text_color
+        )
         apply_run_font(run, font_name, font_size, font_color)
         run.bold = style.bold
         run.italic = style.italic
@@ -1093,7 +1215,7 @@ class MarkdownDocxConverter:
 
 def markdown_to_word(
     *,
-    color: str = "classic-blue",
+    color: str = "gray-background",
     font: str = "宋体",
     font_size: float = 12,
     markdown_file: str | Path | None = None,
@@ -1103,6 +1225,8 @@ def markdown_to_word(
     mermaid_timeout: int = 120,
     download_images: bool = True,
     overwrite: bool = False,
+    cover: bool = False,
+    toc: bool = False,
 ) -> ConversionResult:
     """Convert one Markdown file or Markdown string into a DOCX document.
 
@@ -1115,6 +1239,7 @@ def markdown_to_word(
             "Provide exactly one of markdown_file or markdown_content."
         )
 
+    theme_name = resolve_theme_name(color)
     resolved_color = resolve_color(color)
     resolved_font = resolve_font(font)
     resolved_size = validate_font_size(font_size)
@@ -1160,6 +1285,9 @@ def markdown_to_word(
         mermaid_mode=mermaid_mode,
         mermaid_timeout=mermaid_timeout,
         download_images=download_images,
+        gray_background=theme_name == "gray-background",
+        cover=cover or toc,
+        toc=toc,
     )
     try:
         return converter.convert()
@@ -1221,12 +1349,17 @@ def find_fenced_code_ranges(text: str) -> list[tuple[int, int]]:
     return ranges
 
 
-def resolve_color(value: str) -> str:
+def resolve_theme_name(value: str) -> str | None:
     normalized = value.strip().lower().replace("_", "-")
     normalized = re.sub(r"\s+", " ", normalized)
     alias = THEME_ALIASES.get(normalized, normalized.replace(" ", "-"))
-    if alias in THEME_COLORS:
-        return THEME_COLORS[alias]
+    return alias if alias in THEME_COLORS else None
+
+
+def resolve_color(value: str) -> str:
+    theme_name = resolve_theme_name(value)
+    if theme_name is not None:
+        return THEME_COLORS[theme_name]
 
     match = re.fullmatch(r"#?([0-9a-fA-F]{6})", value.strip())
     if match:
@@ -1273,6 +1406,19 @@ def blend_hex(color_a: str, color_b: str, ratio_b: float) -> str:
         for component_a, component_b in zip(first, second)
     )
     return "".join(f"{component:02X}" for component in blended)
+
+
+def set_document_background(document, color: str) -> None:
+    document_element = document._element
+    background = document_element.find(qn("w:background"))
+    if background is None:
+        background = OxmlElement("w:background")
+        document_element.insert(0, background)
+    background.set(qn("w:color"), color)
+
+    settings = document.settings.element
+    if settings.find(qn("w:displayBackgroundShape")) is None:
+        settings.append(OxmlElement("w:displayBackgroundShape"))
 
 
 def set_style_font(style, font: str, size: float, color: str, bold: bool = False) -> None:
@@ -1684,9 +1830,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--color",
-        default="classic-blue",
+        default="gray-background",
         help=(
-            "Theme color name or #RRGGBB (default: classic-blue). Names: "
+            "Theme color name or #RRGGBB (default: gray-background). Names: "
             + ", ".join(THEME_COLORS)
             + "."
         ),
@@ -1706,6 +1852,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Base font size in points (6-72, default: 12).",
     )
     parser.add_argument("--output", type=Path, help="Output .docx path.")
+    parser.add_argument(
+        "--cover",
+        action="store_true",
+        help="Add a cover using first level-1 heading and current date/time.",
+    )
+    parser.add_argument(
+        "--toc",
+        action="store_true",
+        help="Add native Word TOC on page after cover; also adds cover.",
+    )
     parser.add_argument(
         "--mermaid",
         choices=("auto", "required", "skip"),
@@ -1749,6 +1905,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             mermaid_timeout=arguments.mermaid_timeout,
             download_images=not arguments.no_download_images,
             overwrite=arguments.overwrite,
+            cover=arguments.cover,
+            toc=arguments.toc,
         )
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
