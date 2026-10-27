@@ -494,6 +494,7 @@ class MarkdownDocxConverter:
                 ParagraphStyle, self.document.styles[f"Heading {level}"]
             )
             set_style_font(style, self.font, size, self.color, bold=True)
+            style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
             style.paragraph_format.keep_with_next = True
             style.paragraph_format.keep_together = True
             style.paragraph_format.space_before = Pt(14 if level <= 2 else 10)
@@ -584,7 +585,7 @@ class MarkdownDocxConverter:
 
     def _render_toc(self) -> None:
         heading = self.document.add_paragraph(style="Title")
-        heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
         heading.paragraph_format.space_after = Pt(18)
         run = heading.add_run("目录")
         apply_run_font(run, self.font, max(self.font_size + 6, 18), self.text_color)
@@ -660,8 +661,8 @@ class MarkdownDocxConverter:
 
     def _render_heading(self, node: Tag, level: int) -> None:
         paragraph = self.document.add_paragraph(style=f"Heading {level}")
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
         if level == 1 and self.result.headings == 0:
-            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             paragraph.paragraph_format.space_after = Pt(12)
         self._render_inline(
             node.children,
