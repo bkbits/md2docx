@@ -7,11 +7,11 @@
 - 将 `.md`、`.markdown`、`.txt` 文件转换为 `.docx`
 - 支持直接传入 Markdown 字符串生成 Word 文档
 - 支持 H1-H6 标题，并映射为 Word 原生标题样式
-- 支持粗体、斜体、删除线、下划线、上下标、行内代码
+- 支持粗体、斜体、删除线、行内代码，以及 HTML `<u>`、`<sub>`、`<sup>` 下划线与上下标
 - 支持有序列表、无序列表、嵌套列表和任务清单
 - 支持 GFM 表格、表头主题色、交替行底色和列宽估算
 - 支持引用块、分隔线、脚注、内部链接和外部链接
-- 支持围栏代码块和 Pygments 语法高亮
+- 支持围栏代码块和 Pygments 语法高亮（`gray-background` 主题下代码为单色）
 - 支持本地图片、远程图片、Base64 图片和 SVG 转换
 - 支持 Mermaid 图表渲染为图片后嵌入 Word
 - 支持 LaTeX 行内公式和块级公式；无法渲染时保留公式源文
@@ -106,11 +106,10 @@ python scripts/markdown_to_word.py \
   --output document.docx   --no-download-images
 ```
 
-没有额外说明时使用该方式转换:
+没有额外说明时使用默认样式转换:
 
 ```bash
 python scripts/markdown_to_word.py \
-  --color professional-green \
   --markdown-file <源文件名>.md \
   --output <源文件名>.docx
 ```
@@ -151,7 +150,7 @@ python scripts/markdown_to_word.py \
 - `required`：任何 Mermaid 图无法渲染都会导致转换失败，适合正式技术文档导出。
 - `skip`：不尝试渲染 Mermaid，直接保留源码。
 
-脚本会依次检测全局 `mmdc`、`bunx --bun @mermaid-js/mermaid-cli`、`bunx --yes @mermaid-js/mermaid-cli` 和 `npx --yes @mermaid-js/mermaid-cli`。首次使用 `bunx` 或 `npx` 可能需要联网下载依赖。
+脚本会依次检测全局 `mmdc`、`bunx --bun @mermaid-js/mermaid-cli` 和 `npx --yes @mermaid-js/mermaid-cli`。首次使用 `bunx` 或 `npx` 可能需要联网下载依赖。
 
 ## Python 调用
 
@@ -178,7 +177,7 @@ print(result.output_path)
 print(result.warnings)
 ```
 
-返回值包含输出路径、标题数量、段落数量、表格数量、图片数量、代码块数量、Mermaid 渲染数量、公式渲染数量和警告信息。
+返回值包含输出路径、标题数量、段落数量、列表数量、表格数量、图片数量、代码块数量、Mermaid 渲染与回退数量、公式渲染与回退数量，以及警告信息。
 
 ## 转换验证
 

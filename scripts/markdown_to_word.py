@@ -297,6 +297,8 @@ class MermaidRenderer:
         )
 
     def render(self, source: str, index: int) -> tuple[Path | None, str | None]:
+        if self.mode == "skip":
+            return None, None
         if self.command is None:
             return None, "Mermaid CLI was not found; diagram source was preserved as code."
 
@@ -316,10 +318,8 @@ class MermaidRenderer:
             "white",
             "-s",
             "2",
-            "-w",
+            "--size",
             "1400",
-            "-H",
-            "1000",
             "-c",
             str(self.config_path),
             "-p",
@@ -735,6 +735,12 @@ class MarkdownDocxConverter:
                     for child in item.children
                     if not (isinstance(child, Tag) and child.name in {"ul", "ol"})
                 ]
+                while (
+                    inline_nodes
+                    and isinstance(inline_nodes[-1], NavigableString)
+                    and not str(inline_nodes[-1]).strip()
+                ):
+                    inline_nodes.pop()
             self._render_inline(inline_nodes, paragraph, InlineStyle())
             paragraph.paragraph_format.widow_control = True
             self.result.lists += 1

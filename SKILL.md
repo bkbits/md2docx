@@ -42,7 +42,7 @@ python -m pip install 'Markdown>=3.6,<4' 'beautifulsoup4>=4.12,<5' 'Pillow>=10,<
 可选能力：
 
 - LaTeX 图片渲染：安装 `matplotlib>=3.8,<4`。未安装或公式不兼容时，以 `Cambria Math` 保留 LaTeX 源文，不丢失内容。
-- Mermaid 图表：脚本依次检测全局 `mmdc`、`bunx --bun @mermaid-js/mermaid-cli`、`bunx --yes @mermaid-js/mermaid-cli`。
+- Mermaid 图表：脚本依次检测全局 `mmdc`、`bunx --bun @mermaid-js/mermaid-cli` 和 `npx --yes @mermaid-js/mermaid-cli`。
 - `bunx`/`npx` 首次使用可能下载 Mermaid CLI，需要网络访问，并可能耗时较长。
 - Mermaid CLI 需要 Chromium/Chrome。脚本会检测 `google-chrome`、`chromium`、`chromium-browser`，并兼容 Windows 常见 Chrome/Edge 安装路径。
 - SVG 图片转 PNG 需要 `rsvg-convert`。
@@ -144,7 +144,7 @@ python .agents/skills/md2docx/scripts/markdown_to_word.py \
 脚本支持以下 Markdown 到 Word 映射：
 
 - H1-H6 到 Word 原生标题样式和内部书签
-- 粗体、斜体、删除线、下划线、上下标和行内代码
+- 粗体、斜体、删除线、行内代码，以及 HTML `<u>`、`<sub>`、`<sup>` 下划线与上下标
 - 有序列表、无序列表、嵌套列表和任务清单
 - GFM 表格、表头主题色、交替行底色和列宽估算
 - 引用块、分隔线、脚注和内部/外部链接
@@ -155,8 +155,8 @@ python .agents/skills/md2docx/scripts/markdown_to_word.py \
 
 ## 文件安全
 
-- 默认传递 `--overwrite`。
-- 默认传递 `--output <源文件名>.docx`，生成文件名应与源文件名相同。
+- 输出文件已存在时传递 `--overwrite`（脚本默认不覆盖）。
+- 默认传递 `--output <源文件名>-转换版.docx`，与脚本的默认输出名一致。
 - 不修改 Markdown 源文件。
 - 不删除与转换无关的用户文件或工作区变更。
 
