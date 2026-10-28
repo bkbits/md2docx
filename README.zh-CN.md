@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-`md2docx` 是一个将 Markdown 文件或 Markdown 字符串转换为可编辑 Word 文档（`.docx`）的 UOS AI 技能。它内置转换脚本 `scripts/markdown_to_word.py`，支持常见 GitHub Flavored Markdown 结构，并提供主题色、字体和字号等基础排版参数。
+`md2docx` 将 Markdown 文件或 Markdown 字符串转换为可编辑 Word 文档（`.docx`）。它内置转换脚本 `scripts/markdown_to_word.py`，支持常见 GitHub Flavored Markdown 结构，并提供主题色、字体和字号等基础排版参数。
 
 ## 功能特性
 

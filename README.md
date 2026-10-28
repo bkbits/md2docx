@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-`md2docx` is a UOS AI skill that converts Markdown files or Markdown strings into editable Word documents (`.docx`). It ships the conversion script `scripts/markdown_to_word.py`, supports common GitHub Flavored Markdown constructs, and exposes basic layout options such as theme color, font, and font size.
+`md2docx` converts Markdown files or Markdown strings into editable Word documents (`.docx`). It ships the conversion script `scripts/markdown_to_word.py`, supports common GitHub Flavored Markdown constructs, and exposes basic layout options such as theme color, font, and font size.
 
 ## Features
 
