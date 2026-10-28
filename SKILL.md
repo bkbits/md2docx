@@ -1,6 +1,6 @@
 ---
 name: md2docx
-description: "将 Markdown 文件或内容转换为可编辑 DOCX，支持主题色、中文字体、正文基准字号、分级标题、GFM 表格与列表、代码高亮、图片、Mermaid 和 LaTeX。用户要求 Markdown/MD 转 Word/DOCX、技术文档导出或自动化转换时使用。必需依赖：Markdown>=3.6,<4、beautifulsoup4>=4.12,<5、Pillow>=10,<12、python-docx>=1.2,<2、Pygments>=2.17,<3；可选公式依赖 matplotlib>=3.8,<4；Mermaid 可使用全局 mmdc 或通过 bunx/npx 调用 @mermaid-js/mermaid-cli。"
+description: "将 Markdown 文件或内容转换为可编辑 DOCX，支持主题色、中文字体、正文基准字号、分级标题、GFM 表格与列表、代码高亮、图片、Mermaid 和 LaTeX。用户要求 Markdown/MD 转 Word/DOCX、技术文档导出或自动化转换时使用。必需依赖：markdown-it-py>=3,<5、mdit-py-plugins>=0.4,<1、beautifulsoup4>=4.12,<5、Pillow>=10,<12、python-docx>=1.2,<2、Pygments>=2.17,<3；可选公式依赖 matplotlib>=3.8,<4；Mermaid 可使用全局 mmdc 或通过 bunx/npx 调用 @mermaid-js/mermaid-cli。"
 ---
 
 # MD2DOCX
@@ -25,7 +25,8 @@ description: "将 Markdown 文件或内容转换为可编辑 DOCX，支持主题
 
 必需 Python 依赖：
 
-- `Markdown>=3.6,<4`
+- `markdown-it-py>=3,<5`
+- `mdit-py-plugins>=0.4,<1`
 - `beautifulsoup4>=4.12,<5`
 - `Pillow>=10,<12`
 - `python-docx>=1.2,<2`
@@ -34,7 +35,7 @@ description: "将 Markdown 文件或内容转换为可编辑 DOCX，支持主题
 在缺少依赖时，优先使用项目现有 Python 环境。需要安装时执行：
 
 ```bash
-python -m pip install 'Markdown>=3.6,<4' 'beautifulsoup4>=4.12,<5' 'Pillow>=10,<12' 'python-docx>=1.2,<2' 'Pygments>=2.17,<3'
+python -m pip install 'markdown-it-py>=3,<5' 'mdit-py-plugins>=0.4,<1' 'beautifulsoup4>=4.12,<5' 'Pillow>=10,<12' 'python-docx>=1.2,<2' 'Pygments>=2.17,<3'
 ```
 
 如果系统启用了 PEP 668，不要破坏系统 Python；创建虚拟环境后安装，或使用项目已有环境。
@@ -137,21 +138,24 @@ python .agents/skills/md2docx/scripts/markdown_to_word.py \
 - `required`：任何 Mermaid 图无法渲染都使转换失败。正式技术文档优先使用此模式。
 - `skip`：不尝试渲染，直接保留 Mermaid 源码。
 
-远程图片默认会下载并嵌入 DOCX。如涉及隐私、离线转换或不应访问外网，使用 `--no-download-images`。
+远程图片默认会下载并嵌入 DOCX，单张上限 16 MB，超时 20 秒。如涉及隐私、离线转换或不应访问外网，使用 `--no-download-images`。
 
 ## 支持范围
 
 脚本支持以下 Markdown 到 Word 映射：
 
-- H1-H6 到 Word 原生标题样式和内部书签
+- H1-H6 到 Word 原生标题样式和内部书签（标题 id 由脚本生成，重复标题自动加序号）
 - 粗体、斜体、删除线、行内代码，以及 HTML `<u>`、`<sub>`、`<sup>` 下划线与上下标
-- 有序列表、无序列表、嵌套列表和任务清单
-- GFM 表格、表头主题色、交替行底色和列宽估算
-- 引用块、分隔线、脚注和内部/外部链接
-- 带语言标记的围栏代码块和 Pygments 语法高亮
-- 本地图片、远程图片、Base64 图片和 SVG 转换
-- Mermaid 图表转 PNG 并嵌入 DOCX
+- 有序列表、无序列表、嵌套列表和任务清单（复选框使用 `■`/`□`，不依赖特殊符号字体；含列表项内的引用、代码块、表格等块内容）
+- GFM 表格、表头主题色、交替行底色和列宽估算；单元格内的嵌套表格会生成真实 Word 嵌套表，列宽不超出父单元格
+- 引用块、分隔线、脚注（含引用与回链锚点）和内部/外部链接
+- 带语言标记的围栏代码块和 Pygments 语法高亮（围栏支持 `~` 与更长的闭合围栏）；整块词法分析，多行字符串与注释高亮一致
+- 代码块使用单一段落 + 段内换行，文件体积更小；长代码块可跨页
+- 本地图片、`file://` 图片、远程图片、Base64 图片和 SVG 转换
+- Mermaid 图表转 PNG 并嵌入 DOCX；多图在一次 CLI 调用中批量渲染（共用同一个浏览器），批量失败时自动降级为逐图重试
 - `$...$` 与 `$$...$$` 公式；有 matplotlib 时尝试渲染，否则保留源文
+
+公式识别在词法阶段完成，不会进入行内代码、缩进代码块或围栏代码块，也不会把货币金额（如 `$5` 与 `$10`）当作公式。文档开头的 YAML front matter 会被忽略，HTML 注释不会写入正文。
 
 ## 文件安全
 

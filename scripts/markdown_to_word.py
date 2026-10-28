@@ -37,8 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence, TypedDict, cast
 
 try:
-    import markdown as markdown_lib
-    from bs4 import BeautifulSoup, NavigableString, Tag
+    from bs4 import BeautifulSoup, Comment, NavigableString, Tag
     from docx import Document
     from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
@@ -48,8 +47,9 @@ try:
     from docx.shared import Inches, Pt, RGBColor
     from docx.styles.style import ParagraphStyle
     from docx.text.run import Run
-    from markdown.extensions import Extension
-    from markdown.inlinepatterns import InlineProcessor
+    from markdown_it import MarkdownIt
+    from mdit_py_plugins.footnote import footnote_plugin
+    from mdit_py_plugins.tasklists import tasklists_plugin
     from PIL import Image
 except ImportError as exc:  # pragma: no cover - exercised by dependency errors
     raise SystemExit(
@@ -129,24 +129,344 @@ A4_HEIGHT_INCHES = 11.6929
 PAGE_MARGIN_INCHES = 0.72
 MAX_IMAGE_WIDTH_INCHES = A4_WIDTH_INCHES - (2 * PAGE_MARGIN_INCHES)
 MAX_IMAGE_HEIGHT_INCHES = A4_HEIGHT_INCHES - (2 * PAGE_MARGIN_INCHES) - 0.35
+REMOTE_IMAGE_TIMEOUT_SECONDS = 20
+MAX_REMOTE_IMAGE_BYTES = 16 * 1024 * 1024
+
+# Successor tags for ``w:settings`` children; the OOXML sequence is fixed and
+# Word tolerates violations while stricter consumers may not.
+SETTINGS_AFTER_DISPLAY_BACKGROUND_SHAPE = (
+    "w:printPostScriptOverText",
+    "w:printFractionalCharacterWidth",
+    "w:printFormsData",
+    "w:embedTrueTypeFonts",
+    "w:embedSystemFonts",
+    "w:saveSubsetFonts",
+    "w:saveFormsData",
+    "w:mirrorMargins",
+    "w:alignBordersAndEdges",
+    "w:bordersDoNotSurroundHeader",
+    "w:bordersDoNotSurroundFooter",
+    "w:gutterAtTop",
+    "w:hideSpellingErrors",
+    "w:hideGrammaticalErrors",
+    "w:activeWritingStyle",
+    "w:proofState",
+    "w:formsDesign",
+    "w:attachedTemplate",
+    "w:linkStyles",
+    "w:stylePaneFormatFilter",
+    "w:stylePaneSortMethod",
+    "w:documentType",
+    "w:mailMerge",
+    "w:revisionView",
+    "w:trackRevisions",
+    "w:doNotTrackMoves",
+    "w:doNotTrackFormatting",
+    "w:documentProtection",
+    "w:autoFormatOverride",
+    "w:styleLockTheme",
+    "w:styleLockQFSet",
+    "w:defaultTabStop",
+    "w:autoHyphenation",
+    "w:consecutiveHyphenLimit",
+    "w:hyphenationZone",
+    "w:doNotHyphenateCaps",
+    "w:showEnvelope",
+    "w:summaryLength",
+    "w:clickAndTypeStyle",
+    "w:defaultTableStyle",
+    "w:evenAndOddHeaders",
+    "w:bookFoldRevPrinting",
+    "w:bookFoldPrinting",
+    "w:bookFoldPrintingSheets",
+    "w:drawingGridHorizontalSpacing",
+    "w:drawingGridVerticalSpacing",
+    "w:displayHorizontalDrawingGridEvery",
+    "w:displayVerticalDrawingGridEvery",
+    "w:doNotUseMarginsForDrawingGridOrigin",
+    "w:drawingGridHorizontalOrigin",
+    "w:drawingGridVerticalOrigin",
+    "w:doNotShadeFormData",
+    "w:noPunctuationKerning",
+    "w:characterSpacingControl",
+    "w:printTwoOnOne",
+    "w:strictFirstAndLastChars",
+    "w:noLineBreaksAfter",
+    "w:noLineBreaksBefore",
+    "w:savePreviewPicture",
+    "w:doNotValidateAgainstSchema",
+    "w:saveInvalidXml",
+    "w:ignoreMixedContent",
+    "w:alwaysShowPlaceholderText",
+    "w:doNotDemarcateInvalidXml",
+    "w:saveXmlDataOnly",
+    "w:useXSLTWhenSaving",
+    "w:saveThroughXslt",
+    "w:showXMLTags",
+    "w:alwaysMergeEmptyNamespace",
+    "w:updateFields",
+    "w:hdrShapeDefaults",
+    "w:footnotePr",
+    "w:endnotePr",
+    "w:compat",
+    "w:docVars",
+    "w:rsids",
+    "m:mathPr",
+    "w:attachedSchema",
+    "w:themeFontLang",
+    "w:clrSchemeMapping",
+    "w:doNotIncludeSubdocsInStats",
+    "w:doNotAutoCompressPictures",
+    "w:forceUpgrade",
+    "w:captions",
+    "w:readModeInkLockDown",
+    "w:smartTagType",
+    "sl:schemaLibrary",
+    "w:shapeDefaults",
+    "w:doNotEmbedSmartTags",
+    "w:decimalSymbol",
+    "w:listSeparator",
+)
+
+SETTINGS_AFTER_UPDATE_FIELDS = (
+    "w:hdrShapeDefaults",
+    "w:footnotePr",
+    "w:endnotePr",
+    "w:compat",
+    "w:docVars",
+    "w:rsids",
+    "m:mathPr",
+    "w:attachedSchema",
+    "w:themeFontLang",
+    "w:clrSchemeMapping",
+    "w:doNotIncludeSubdocsInStats",
+    "w:doNotAutoCompressPictures",
+    "w:forceUpgrade",
+    "w:captions",
+    "w:readModeInkLockDown",
+    "w:smartTagType",
+    "sl:schemaLibrary",
+    "w:shapeDefaults",
+    "w:doNotEmbedSmartTags",
+    "w:decimalSymbol",
+    "w:listSeparator",
+)
 
 
-class DelInlineProcessor(InlineProcessor):
-    """Minimal GitHub-style ``~~strikethrough~~`` support."""
+INLINE_TAGS = frozenset(
+    {
+        "a",
+        "abbr",
+        "b",
+        "br",
+        "cite",
+        "code",
+        "del",
+        "em",
+        "i",
+        "img",
+        "input",
+        "ins",
+        "kbd",
+        "mark",
+        "q",
+        "s",
+        "samp",
+        "small",
+        "span",
+        "strong",
+        "sub",
+        "sup",
+        "u",
+        "var",
+    }
+)
 
-    def handleMatch(self, m, data):  # noqa: N802 - Markdown API name
-        element = __import__("xml.etree.ElementTree", fromlist=["Element"]).Element(
-            "del"
+
+def math_delimiter(state, position: int) -> tuple[bool, bool]:
+    """Return ``(can_open, can_close)`` for the ``$`` at ``position``."""
+    source = state.src
+    previous = source[position - 1] if position > 0 else "\n"
+    following = source[position + 1] if position + 1 < len(source) else "\n"
+    can_open = following not in " \t\n$"
+    can_close = previous not in " \t\n$" and not following.isdigit()
+    return can_open, can_close
+
+
+def has_unescaped_dollar(text: str) -> bool:
+    """True when ``text`` holds a ``$`` that is not backslash-escaped."""
+    index = text.find("$")
+    while index != -1:
+        backslashes = 0
+        probe = index - 1
+        while probe >= 0 and text[probe] == "\\":
+            backslashes += 1
+            probe -= 1
+        if backslashes % 2 == 0:
+            return True
+        index = text.find("$", index + 1)
+    return False
+
+
+def math_inline_rule(state, silent: bool) -> bool:
+    """Parse ``$...$`` with code-span and currency aware boundaries."""
+    if state.src[state.pos] != "$":
+        return False
+    can_open, _ = math_delimiter(state, state.pos)
+    if not can_open:
+        if not silent:
+            state.pending += "$"
+        state.pos += 1
+        return True
+
+    start = state.pos + 1
+    cursor = start
+    closing = -1
+    while True:
+        cursor = state.src.find("$", cursor)
+        if cursor == -1:
+            break
+        backslashes = 0
+        probe = cursor - 1
+        while probe >= 0 and state.src[probe] == "\\":
+            backslashes += 1
+            probe -= 1
+        if backslashes % 2 == 0:
+            closing = cursor
+            break
+        cursor += 1
+
+    if closing == -1 or closing == start:
+        if not silent:
+            state.pending += "$"
+        state.pos = start
+        return True
+
+    _, can_close = math_delimiter(state, closing)
+    content = state.src[start:closing]
+    if not can_close or has_unescaped_dollar(content):
+        if not silent:
+            state.pending += "$"
+        state.pos = start
+        return True
+
+    if not silent:
+        token = state.push("math_inline", "math", 0)
+        token.markup = "$"
+        token.content = content
+    state.pos = closing + 1
+    return True
+
+
+def math_block_rule(state, start: int, end: int, silent: bool) -> bool:
+    """Parse a ``$$`` block, including blocks nested in lists and quotes."""
+    position = state.bMarks[start] + state.tShift[start]
+    maximum = state.eMarks[start]
+    if position + 2 > maximum or state.src[position : position + 2] != "$$":
+        return False
+    if silent:
+        return True
+
+    position += 2
+    first_line = state.src[position:maximum]
+    closed = False
+    last_line = ""
+    next_line = start
+    if first_line.strip().endswith("$$"):
+        first_line = first_line.strip()[:-2]
+        closed = True
+
+    while not closed:
+        next_line += 1
+        if next_line >= end:
+            break
+        line_start = state.bMarks[next_line] + state.tShift[next_line]
+        line_end = state.eMarks[next_line]
+        if line_start < line_end and state.tShift[next_line] < state.blkIndent:
+            break
+        line_text = state.src[line_start:line_end].rstrip()
+        if line_text.endswith("$$"):
+            marker = state.src.rfind("$$", line_start, line_end)
+            last_line = state.src[line_start:marker]
+            closed = True
+
+    if not closed:
+        return False
+
+    state.line = next_line + 1
+    token = state.push("math_block", "math", 0)
+    token.block = True
+    token.map = [start, state.line]
+    token.markup = "$$"
+    body = state.getLines(start + 1, next_line, state.tShift[start], True)
+    token.content = (
+        (first_line.strip() + "\n" if first_line.strip() else "") + body + last_line
+    )
+    return True
+
+
+def render_math_inline(self, tokens, idx, options, env) -> str:
+    latex = html.escape(tokens[idx].content, quote=True)
+    return f'<span class="math-inline" data-latex="{latex}"></span>'
+
+
+def render_math_block(self, tokens, idx, options, env) -> str:
+    latex = html.escape(tokens[idx].content.strip(), quote=True)
+    return f'<div class="math-block" data-latex="{latex}"></div>'
+
+
+def heading_text(token) -> str:
+    parts: list[str] = []
+    pending = list(token.children or [])
+    while pending:
+        child = pending.pop(0)
+        if child.type in {"text", "code_inline"}:
+            parts.append(child.content)
+        elif child.type in {"softbreak", "hardbreak"}:
+            parts.append(" ")
+        elif child.children:
+            pending[0:0] = list(child.children)
+    return "".join(parts)
+
+
+def heading_id_rule(state) -> bool:
+    """Attach stable, unique ids so internal links can resolve."""
+    seen: dict[str, int] = {}
+    tokens = state.tokens
+    for index, token in enumerate(tokens):
+        if token.type != "heading_open":
+            continue
+        inline = tokens[index + 1] if index + 1 < len(tokens) else None
+        slug = slugify_heading(
+            heading_text(inline) if inline is not None else "", "-"
         )
-        element.text = m.group(1)
-        return element, m.start(0), m.end(0)
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        token.attrSet("id", slug if count == 0 else f"{slug}-{count}")
+    return True
 
 
-class StrikethroughExtension(Extension):
-    def extendMarkdown(self, md):  # noqa: N802 - Markdown API name
-        md.inlinePatterns.register(
-            DelInlineProcessor(r"~~(.+?)~~", md), "strikethrough", 175
-        )
+def build_markdown_parser() -> MarkdownIt:
+    parser = MarkdownIt("commonmark")
+    parser.options["html"] = True
+    parser.enable(["table", "strikethrough"])
+
+    default_validate_link = parser.validateLink
+
+    def validate_link(url: str) -> bool:
+        if url.lower().startswith("file:"):
+            return True
+        return default_validate_link(url)
+
+    parser.validateLink = validate_link
+    parser.inline.ruler.after("backticks", "math_inline", math_inline_rule)
+    parser.block.ruler.after("fence", "math_block", math_block_rule)
+    parser.add_render_rule("math_inline", render_math_inline)
+    parser.add_render_rule("math_block", render_math_block)
+    parser.core.ruler.push("heading_ids", heading_id_rule)
+    parser.use(footnote_plugin)
+    parser.use(tasklists_plugin)
+    return parser
 
 
 @dataclass(frozen=True)
@@ -198,12 +518,13 @@ class MermaidRenderer:
         self.command = self._find_command() if mode != "skip" else None
         self.config_path = work_dir / "mermaid-config.json"
         self.puppeteer_path = work_dir / "puppeteer-config.json"
-        self._write_configs()
 
         if mode == "required" and self.command is None:
             raise RuntimeError(
                 "Mermaid rendering was required, but mmdc, bunx, and npx were not found."
             )
+        if mode != "skip":
+            self._write_configs()
 
     @staticmethod
     def _find_command() -> list[str] | None:
@@ -326,11 +647,7 @@ class MermaidRenderer:
             str(self.puppeteer_path),
             "-q",
         ]
-        environment = os.environ.copy()
-        chrome = self._find_chrome()
-        if chrome:
-            environment["PUPPETEER_EXECUTABLE_PATH"] = chrome
-            environment["PUPPETEER_SKIP_DOWNLOAD"] = "true"
+        environment = self._environment()
 
         try:
             process = subprocess.run(
@@ -359,6 +676,90 @@ class MermaidRenderer:
         if self.mode == "required":
             raise RuntimeError(message)
         return None, message
+
+    def render_all(
+        self, sources: Sequence[str]
+    ) -> list[tuple[Path | None, str | None]]:
+        """Render every diagram, batching them into one CLI call when possible."""
+        if not sources:
+            return []
+        if self.mode == "skip":
+            return [(None, None) for _ in sources]
+        if self.command is None:
+            message = (
+                "Mermaid CLI was not found; diagram source was preserved as code."
+            )
+            return [(None, message) for _ in sources]
+
+        batched = self._render_batch(sources)
+        if batched is not None:
+            return batched
+        return [self.render(source, index + 1) for index, source in enumerate(sources)]
+
+    def _render_batch(
+        self, sources: Sequence[str]
+    ) -> list[tuple[Path | None, str | None]] | None:
+        """One CLI call for all diagrams; ``None`` means fall back per diagram."""
+        if any("```" in source for source in sources):
+            return None
+
+        batch_input = self.work_dir / "mermaid-batch.md"
+        batch_output = self.work_dir / "mermaid-batch.png"
+        blocks = "\n\n".join(
+            f"```mermaid\n{source.strip()}\n```" for source in sources
+        )
+        batch_input.write_text(blocks + "\n", encoding="utf-8")
+
+        command = [
+            *self.command,
+            "-i",
+            str(batch_input),
+            "-o",
+            str(batch_output),
+            "-e",
+            "png",
+            "-b",
+            "white",
+            "-s",
+            "2",
+            "--size",
+            "1400",
+            "-c",
+            str(self.config_path),
+            "-p",
+            str(self.puppeteer_path),
+            "-q",
+        ]
+        try:
+            process = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_seconds * max(1, len(sources)),
+                env=self._environment(),
+            )
+        except subprocess.TimeoutExpired:
+            return None
+
+        if process.returncode != 0:
+            return None
+
+        results: list[tuple[Path | None, str | None]] = []
+        for index in range(1, len(sources) + 1):
+            candidate = batch_output.with_name(f"{batch_output.stem}-{index}.png")
+            if not candidate.exists():
+                return None
+            results.append((candidate, None))
+        return results
+
+    def _environment(self) -> dict[str, str]:
+        environment = os.environ.copy()
+        chrome = self._find_chrome()
+        if chrome:
+            environment["PUPPETEER_EXECUTABLE_PATH"] = chrome
+            environment["PUPPETEER_SKIP_DOWNLOAD"] = "true"
+        return environment
 
 
 class FormulaRenderer:
@@ -446,9 +847,11 @@ class MarkdownDocxConverter:
         self.download_images = download_images
         self.result = ConversionResult(output_path=output_path)
         self.document = Document()
+        self.parser = build_markdown_parser()
         self.bookmark_id = 1
         self.bookmarks: dict[str, str] = {}
         self.mermaid_index = 0
+        self.mermaid_results: list[tuple[Path | None, str | None]] = []
         self.image_index = 0
         self._temporary_directory = tempfile.TemporaryDirectory(
             prefix="markdown-to-word-"
@@ -525,21 +928,8 @@ class MarkdownDocxConverter:
 
     def convert(self) -> ConversionResult:
         prepared = prepare_markdown(self.markdown_text)
-        rendered_html = markdown_lib.markdown(
-            prepared,
-            extensions=[
-                "extra",
-                "sane_lists",
-                "toc",
-                "md_in_html",
-                StrikethroughExtension(),
-            ],
-            extension_configs={
-                "toc": {"permalink": False, "slugify": slugify_heading},
-            },
-            output_format="html",
-        )
-        soup = BeautifulSoup(rendered_html, "html.parser")
+        soup = BeautifulSoup(self.parser.render(prepared), "html.parser")
+        self._render_mermaid_diagrams(soup)
 
         first_h1 = soup.find("h1")
         title = first_h1.get_text(" ", strip=True) if first_h1 else "未命名文档"
@@ -564,6 +954,15 @@ class MarkdownDocxConverter:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.document.save(str(self.output_path))
         return self.result
+
+    def _render_mermaid_diagrams(self, soup: BeautifulSoup) -> None:
+        """Render every Mermaid block up front so one browser can serve all of them."""
+        sources = [
+            code.get_text()
+            for code in soup.find_all("code", class_="language-mermaid")
+        ]
+        if sources:
+            self.mermaid_results = self.mermaid.render_all(sources)
 
     def _render_cover(self, title: str) -> None:
         paragraph = self.document.add_paragraph()
@@ -605,7 +1004,9 @@ class MarkdownDocxConverter:
         update_fields = self.document.settings.element.find(qn("w:updateFields"))
         if update_fields is None:
             update_fields = OxmlElement("w:updateFields")
-            self.document.settings.element.append(update_fields)
+            self.document.settings.element.insert_element_before(
+                update_fields, *SETTINGS_AFTER_UPDATE_FIELDS
+            )
         update_fields.set(qn("w:val"), "true")
 
     def _add_page_break(self) -> None:
@@ -613,10 +1014,14 @@ class MarkdownDocxConverter:
         paragraph.add_run().add_break(WD_BREAK.PAGE)
 
     def _render_block(self, node, *, quote: bool = False) -> None:
+        if isinstance(node, Comment):
+            return
         if isinstance(node, NavigableString):
             text = str(node).strip()
             if text:
                 paragraph = self.document.add_paragraph()
+                if quote:
+                    self._style_blockquote(paragraph)
                 self._add_text(paragraph, text, InlineStyle())
                 self.result.paragraphs += 1
             return
@@ -632,11 +1037,12 @@ class MarkdownDocxConverter:
             self._render_list(node, depth=0)
         elif name == "blockquote":
             for child in node.children:
-                if isinstance(child, Tag):
-                    if child.name in {"ul", "ol"}:
-                        self._render_list(child, depth=0, quote=True)
-                    else:
-                        self._render_block(child, quote=True)
+                if isinstance(child, Comment):
+                    continue
+                if isinstance(child, Tag) and child.name in {"ul", "ol"}:
+                    self._render_list(child, depth=0, quote=True)
+                else:
+                    self._render_block(child, quote=True)
         elif name == "pre":
             self._render_preformatted(node)
         elif name == "table":
@@ -647,6 +1053,8 @@ class MarkdownDocxConverter:
             self._render_block_formula(
                 str(node.get("data-latex") or node.get_text())
             )
+        elif name == "section" and "footnotes" in tag_classes(node):
+            self._render_footnotes(node)
         elif name == "div" and "footnote" in tag_classes(node):
             self._render_footnotes(node)
         elif name in {"section", "article", "main", "div"}:
@@ -688,7 +1096,13 @@ class MarkdownDocxConverter:
         paragraph.paragraph_format.widow_control = True
         self.result.paragraphs += 1
 
-    def _render_list(self, node: Tag, depth: int, quote: bool = False) -> None:
+    def _render_list(
+        self,
+        node: Tag,
+        depth: int,
+        quote: bool = False,
+        bookmark_item_ids: bool = False,
+    ) -> None:
         ordered = node.name.lower() == "ol"
         direct_items = node.find_all("li", recursive=False)
         style_depth = min(depth + 1, 3)
@@ -706,55 +1120,103 @@ class MarkdownDocxConverter:
             num_id = self._new_numbering_instance(style_name, start) if ordered else None
         except KeyError:
             num_id = None
+        continuation_indent = 0.25 * (depth + 1) + 0.25
 
         for item_index, item in enumerate(direct_items):
-            try:
-                paragraph = self.document.add_paragraph(style=style_name)
-                if num_id is not None:
-                    num_pr = paragraph._p.get_or_add_pPr().get_or_add_numPr()
-                    num_pr.get_or_add_ilvl().val = 0
-                    num_pr.get_or_add_numId().val = num_id
-            except KeyError:
-                paragraph = self.document.add_paragraph()
-                paragraph.paragraph_format.left_indent = Inches(0.25 * (depth + 1))
-                paragraph.paragraph_format.first_line_indent = Inches(-0.18)
-                self._add_text(
-                    paragraph,
-                    f"{start + item_index}. " if ordered else "• ",
-                    InlineStyle(bold=ordered),
-                )
+            paragraph = self._open_list_paragraph(
+                style_name, num_id, depth, start, item_index, ordered
+            )
             if quote:
                 self._style_blockquote(paragraph)
 
-            first_paragraph = item.find("p", recursive=False)
-            if first_paragraph is not None:
-                inline_nodes = list(first_paragraph.children)
-            else:
-                inline_nodes = [
-                    child
-                    for child in item.children
-                    if not (isinstance(child, Tag) and child.name in {"ul", "ol"})
-                ]
-                while (
-                    inline_nodes
-                    and isinstance(inline_nodes[-1], NavigableString)
-                    and not str(inline_nodes[-1]).strip()
-                ):
-                    inline_nodes.pop()
-            self._render_inline(inline_nodes, paragraph, InlineStyle())
+            first_paragraph_seen = False
+            for child in item.children:
+                if isinstance(child, Comment):
+                    continue
+                if isinstance(child, NavigableString):
+                    text = str(child)
+                    if not text.strip():
+                        continue
+                    if not paragraph.runs:
+                        text = text.lstrip("\n")
+                    self._add_text(paragraph, text, InlineStyle())
+                    continue
+                if not isinstance(child, Tag):
+                    continue
+
+                child_name = child.name.lower()
+                if child_name in {"ul", "ol"}:
+                    self._render_list(child, depth=depth + 1, quote=quote)
+                elif child_name in INLINE_TAGS:
+                    self._render_inline([child], paragraph, InlineStyle())
+                elif child_name == "p" and not first_paragraph_seen:
+                    first_paragraph_seen = True
+                    self._render_inline(child.children, paragraph, InlineStyle())
+                else:
+                    self._render_block_indented(
+                        child, continuation_indent, quote=quote
+                    )
+
+            self._trim_trailing_space(paragraph)
             paragraph.paragraph_format.widow_control = True
+            item_id = str(item.get("id") or "")
+            if bookmark_item_ids and item_id:
+                name = make_bookmark_name(item_id)
+                self.bookmarks[item_id] = name
+                self._add_bookmark(paragraph, name)
             self.result.lists += 1
 
-            if first_paragraph is not None:
-                extra_paragraphs = item.find_all("p", recursive=False)[1:]
-                for extra in extra_paragraphs:
-                    extra_p = self.document.add_paragraph()
-                    extra_p.paragraph_format.left_indent = Inches(0.25 * (depth + 1))
-                    self._render_inline(extra.children, extra_p, InlineStyle())
-                    self.result.paragraphs += 1
+    @staticmethod
+    def _trim_trailing_space(paragraph) -> None:
+        """Drop the newline the HTML formatter leaves at the end of a list item."""
+        for run in reversed(paragraph.runs):
+            text = run.text
+            if not text:
+                continue
+            stripped = text.rstrip("\n")
+            if stripped != text:
+                run.text = stripped
+            if stripped:
+                return
 
-            for nested in item.find_all(["ul", "ol"], recursive=False):
-                self._render_list(nested, depth=depth + 1, quote=quote)
+    def _open_list_paragraph(
+        self,
+        style_name: str,
+        num_id: int | None,
+        depth: int,
+        start: int,
+        item_index: int,
+        ordered: bool,
+    ):
+        try:
+            paragraph = self.document.add_paragraph(style=style_name)
+            if num_id is not None:
+                num_pr = paragraph._p.get_or_add_pPr().get_or_add_numPr()
+                num_pr.get_or_add_ilvl().val = 0
+                num_pr.get_or_add_numId().val = num_id
+        except KeyError:
+            paragraph = self.document.add_paragraph()
+            paragraph.paragraph_format.left_indent = Inches(0.25 * (depth + 1))
+            paragraph.paragraph_format.first_line_indent = Inches(-0.18)
+            self._add_text(
+                paragraph,
+                f"{start + item_index}. " if ordered else "• ",
+                InlineStyle(bold=ordered),
+            )
+        return paragraph
+
+    def _render_block_indented(
+        self, node: Tag, indent_inches: float, quote: bool = False
+    ) -> None:
+        before = len(self.document.paragraphs)
+        self._render_block(node, quote=quote)
+        for paragraph in self.document.paragraphs[before:]:
+            current = paragraph.paragraph_format.left_indent
+            paragraph.paragraph_format.left_indent = (
+                Inches(indent_inches)
+                if current is None
+                else current + Inches(indent_inches)
+            )
 
     def _new_numbering_instance(self, style_name: str, start: int) -> int:
         style = cast(ParagraphStyle, self.document.styles[style_name])
@@ -778,13 +1240,25 @@ class MarkdownDocxConverter:
 
         if language.lower() == "mermaid":
             self.mermaid_index += 1
-            rendered, warning = self.mermaid.render(source, self.mermaid_index)
+            if self.mermaid_index - 1 < len(self.mermaid_results):
+                rendered, warning = self.mermaid_results[self.mermaid_index - 1]
+            else:
+                rendered, warning = self.mermaid.render(source, self.mermaid_index)
             if rendered is not None:
-                self._add_image_from_path(
-                    rendered,
-                    alt=f"Mermaid diagram {self.mermaid_index}",
-                    force_max_width=True,
-                )
+                try:
+                    self._add_image_from_path(
+                        rendered,
+                        alt=f"Mermaid diagram {self.mermaid_index}",
+                        force_max_width=True,
+                    )
+                except Exception as exc:
+                    self.result.mermaid_fallback += 1
+                    self.result.warnings.append(
+                        f"Mermaid diagram {self.mermaid_index} could not be "
+                        f"embedded: {exc}"
+                    )
+                    self._render_code_block(source, "mermaid")
+                    return
                 self.result.mermaid_rendered += 1
                 return
             self.result.mermaid_fallback += 1
@@ -804,66 +1278,83 @@ class MarkdownDocxConverter:
             apply_run_font(run, self.font, max(8, self.font_size - 2), self.color)
             run.bold = True
 
-        lines = source.rstrip("\n").splitlines() or [""]
+        text = source.rstrip("\n")
+        base_size = max(8, self.font_size - 1)
+        fallback_style = InlineStyle(code=True, size=base_size)
+
+        paragraph = self.document.add_paragraph()
+        paragraph.paragraph_format.space_before = Pt(0 if language else 5)
+        paragraph.paragraph_format.space_after = Pt(5)
+        paragraph.paragraph_format.line_spacing = 1.0
+        paragraph.paragraph_format.left_indent = Inches(0.12)
+        paragraph.paragraph_format.right_indent = Inches(0.12)
+        set_paragraph_shading(paragraph, "F5F7FA")
+        set_paragraph_border(
+            paragraph,
+            left={"val": "single", "sz": "8", "color": self.color},
+        )
+
         lexer = None
         if lex is not None and get_lexer_by_name is not None:
             try:
-                lexer = get_lexer_by_name(language or "text")
+                lexer = get_lexer_by_name(
+                    language or "text", stripnl=False, ensurenl=False
+                )
             except Exception:
-                lexer = TextLexer() if TextLexer is not None else None
-
-        for index, line in enumerate(lines):
-            paragraph = self.document.add_paragraph()
-            paragraph.paragraph_format.space_before = Pt(0)
-            paragraph.paragraph_format.space_after = Pt(0 if index < len(lines) - 1 else 5)
-            paragraph.paragraph_format.line_spacing = 1.0
-            paragraph.paragraph_format.keep_with_next = index < len(lines) - 1
-            paragraph.paragraph_format.left_indent = Inches(0.12)
-            paragraph.paragraph_format.right_indent = Inches(0.12)
-            set_paragraph_shading(paragraph, "F5F7FA")
-            set_paragraph_border(
-                paragraph,
-                left={"val": "single", "sz": "8", "color": self.color},
-            )
-
-            if lexer is None:
-                self._add_text(
-                    paragraph,
-                    line or " ",
-                    InlineStyle(code=True, size=max(8, self.font_size - 1)),
+                lexer = (
+                    TextLexer(stripnl=False, ensurenl=False)
+                    if TextLexer is not None
+                    else None
                 )
+
+        if lexer is None or not text:
+            self._add_text(paragraph, text or " ", fallback_style)
+            self.result.code_blocks += 1
+            return
+
+        # One paragraph with in-paragraph breaks keeps the file small, and lexing
+        # the whole block keeps multi-line tokens (strings, comments) correct.
+        pending_text = ""
+        pending_style: InlineStyle | None = None
+        assert lex is not None
+        for token_type, token_text in lex(text, lexer):
+            cleaned = token_text.replace("\r", "")
+            if not cleaned:
                 continue
+            token_style = pygments_style(token_type)
+            style = InlineStyle(
+                code=True,
+                size=base_size,
+                bold=token_style.get("bold", False),
+                italic=token_style.get("italic", False),
+                color=(
+                    self.text_color
+                    if self.gray_background
+                    else token_style.get("color")
+                ),
+            )
+            if pending_style is not None and style != pending_style:
+                self._add_text(paragraph, pending_text, pending_style)
+                pending_text = ""
+            pending_style = style
+            pending_text += cleaned
 
-            had_text = False
-            assert lex is not None
-            for token_type, token_text in lex(line, lexer):
-                token_text = token_text.replace("\n", "")
-                if not token_text:
-                    continue
-                had_text = True
-                token_style = pygments_style(token_type)
-                style = InlineStyle(
-                    code=True,
-                    size=max(8, self.font_size - 1),
-                    bold=token_style.get("bold", False),
-                    italic=token_style.get("italic", False),
-                    color=(
-                        self.text_color
-                        if self.gray_background
-                        else token_style.get("color")
-                    ),
-                )
-                self._add_text(paragraph, token_text, style)
-            if not had_text:
-                self._add_text(
-                    paragraph,
-                    " ",
-                    InlineStyle(code=True, size=max(8, self.font_size - 1)),
-                )
+        if pending_text:
+            self._add_text(paragraph, pending_text, pending_style or fallback_style)
+        if not paragraph.runs:
+            self._add_text(paragraph, " ", fallback_style)
+
         self.result.code_blocks += 1
 
-    def _render_table(self, node: Tag) -> None:
-        html_rows = node.find_all("tr")
+    def _render_table(
+        self,
+        node: Tag,
+        *,
+        container=None,
+        max_width: float | None = None,
+        font_size: float | None = None,
+    ) -> None:
+        html_rows = self._table_rows(node)
         if not html_rows:
             return
         column_count = max(
@@ -871,12 +1362,16 @@ class MarkdownDocxConverter:
         )
         if column_count == 0:
             return
+        header_rows = self._table_header_rows(node, html_rows)
+        available_width = MAX_IMAGE_WIDTH_INCHES if max_width is None else max_width
+        cell_font_size = self.table_font_size if font_size is None else font_size
+        parent = self.document if container is None else container
 
-        table = self.document.add_table(rows=len(html_rows), cols=column_count)
+        table = parent.add_table(rows=len(html_rows), cols=column_count)
         table.style = "Table Grid"
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         table.autofit = False
-        widths = calculate_column_widths(html_rows, column_count)
+        widths = calculate_column_widths(html_rows, column_count, available_width)
 
         for row_index, html_row in enumerate(html_rows):
             cells = html_row.find_all(["th", "td"], recursive=False)
@@ -892,31 +1387,141 @@ class MarkdownDocxConverter:
                 paragraph.paragraph_format.line_spacing = 1.15
                 if column_index < len(cells):
                     html_cell = cells[column_index]
-                    self._render_inline(
-                        html_cell.children,
-                        paragraph,
-                        InlineStyle(size=self.table_font_size),
+                    self._render_table_cell(
+                        html_cell, cell, paragraph, cell_font_size, widths[column_index]
                     )
                     alignment = get_html_alignment(html_cell)
                     if alignment is not None:
                         paragraph.alignment = alignment
-                if row_index == 0:
+                if row_index < header_rows:
                     set_cell_shading(cell, self.table_header_color)
-                    for run in paragraph.runs:
-                        run.bold = True
-                        run.font.color.rgb = RGBColor.from_string(
-                            self.text_color if self.gray_background else "FFFFFF"
-                        )
-                elif row_index % 2 == 0:
+                    for item in cell.paragraphs:
+                        for run in item.runs:
+                            run.bold = True
+                            run.font.color.rgb = RGBColor.from_string(
+                                self.text_color if self.gray_background else "FFFFFF"
+                            )
+                elif (row_index - header_rows) % 2 == 1:
                     set_cell_shading(cell, "F7F9FB")
 
-            if row_index == 0:
+            if row_index < header_rows:
                 set_repeat_table_header(word_row)
             set_keep_table_row_together(word_row)
 
         self.result.tables += 1
-        spacer = self.document.add_paragraph()
-        spacer.paragraph_format.space_after = Pt(0)
+        if container is None:
+            spacer = self.document.add_paragraph()
+            spacer.paragraph_format.space_after = Pt(0)
+
+    def _render_table_cell(
+        self,
+        html_cell: Tag,
+        cell,
+        paragraph,
+        font_size: float,
+        cell_width: float,
+    ) -> None:
+        style = InlineStyle(size=font_size)
+        self._collapse_cell_whitespace(html_cell)
+        if html_cell.find("table") is None:
+            self._render_inline(html_cell.children, paragraph, style)
+            self._trim_paragraph_edges(paragraph)
+            return
+
+        current = paragraph
+        for child in html_cell.children:
+            if isinstance(child, Comment):
+                continue
+            if isinstance(child, NavigableString):
+                text = str(child)
+                if text.strip():
+                    self._add_text(current, text, style)
+                continue
+            if not isinstance(child, Tag):
+                continue
+
+            child_name = child.name.lower()
+            if child_name == "table":
+                self._render_table(
+                    child,
+                    container=cell,
+                    max_width=max(1.0, cell_width - 0.16),
+                    font_size=max(7.5, font_size - 0.5),
+                )
+                trailing = cell.paragraphs[-1] if cell.paragraphs else None
+                if trailing is not None and not trailing.text:
+                    current = trailing
+                else:
+                    current = self._add_cell_paragraph(cell)
+                continue
+            if child_name in INLINE_TAGS:
+                self._render_inline([child], current, style)
+                continue
+            if child_name == "p":
+                if current.text:
+                    current = self._add_cell_paragraph(cell)
+                self._render_inline(child.children, current, style)
+                continue
+            self._render_inline([child], current, style)
+
+        for item in cell.paragraphs:
+            self._trim_paragraph_edges(item)
+
+    @staticmethod
+    def _collapse_cell_whitespace(html_cell: Tag) -> None:
+        """Treat source indentation inside HTML table cells as a single space."""
+        for text_node in list(html_cell.find_all(string=True)):
+            parent = text_node.parent
+            if parent is None or parent.name in {"code", "pre"}:
+                continue
+            collapsed = re.sub(r"\s+", " ", str(text_node))
+            if collapsed != str(text_node):
+                text_node.replace_with(collapsed)
+
+    @staticmethod
+    def _trim_paragraph_edges(paragraph) -> None:
+        runs = [child for child in paragraph._p if child.tag == qn("w:r")]
+        if not runs:
+            return
+        for run_element, leading in ((runs[0], True), (runs[-1], False)):
+            if run_element.find(qn("w:drawing")) is not None:
+                continue
+            text_nodes = run_element.findall(qn("w:t"))
+            if not text_nodes:
+                continue
+            node = text_nodes[0] if leading else text_nodes[-1]
+            if not node.text:
+                continue
+            node.text = node.text.lstrip() if leading else node.text.rstrip()
+
+    def _add_cell_paragraph(self, cell):
+        paragraph = cell.add_paragraph()
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 1.15
+        return paragraph
+
+    @staticmethod
+    def _table_rows(node: Tag) -> list[Tag]:
+        """Collect only this table's rows, ignoring nested tables."""
+        rows: list[Tag] = []
+        for child in node.children:
+            if not isinstance(child, Tag):
+                continue
+            if child.name == "tr":
+                rows.append(child)
+            elif child.name in {"thead", "tbody", "tfoot"}:
+                rows.extend(child.find_all("tr", recursive=False))
+        return rows
+
+    @staticmethod
+    def _table_header_rows(node: Tag, rows: Sequence[Tag]) -> int:
+        head = node.find("thead")
+        if head is not None:
+            return max(1, len(head.find_all("tr", recursive=False)))
+        if rows and rows[0].find("th") is not None:
+            return 1
+        return 0
 
     def _render_horizontal_rule(self) -> None:
         paragraph = self.document.add_paragraph()
@@ -931,14 +1536,18 @@ class MarkdownDocxConverter:
         latex = html.unescape(latex).strip()
         image = self.formulas.render(latex, block=True)
         if image is not None:
-            self._add_image_from_path(
-                image,
-                alt="LaTeX formula",
-                force_max_width=False,
-                max_width=MAX_IMAGE_WIDTH_INCHES * 0.85,
-            )
-            self.result.formulas_rendered += 1
-            return
+            try:
+                self._add_image_from_path(
+                    image,
+                    alt="LaTeX formula",
+                    force_max_width=False,
+                    max_width=MAX_IMAGE_WIDTH_INCHES * 0.85,
+                )
+            except Exception:
+                pass
+            else:
+                self.result.formulas_rendered += 1
+                return
 
         paragraph = self.document.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -953,10 +1562,14 @@ class MarkdownDocxConverter:
         self.result.formulas_fallback += 1
 
     def _render_footnotes(self, node: Tag) -> None:
-        self._render_horizontal_rule()
-        for child in node.children:
-            if isinstance(child, Tag):
-                self._render_block(child)
+        lists = node.find_all(["ol", "ul"], recursive=False)
+        if not lists:
+            for child in node.children:
+                if isinstance(child, Tag):
+                    self._render_block(child)
+            return
+        for list_node in lists:
+            self._render_list(list_node, depth=0, bookmark_item_ids=True)
 
     def _render_inline(
         self,
@@ -965,6 +1578,8 @@ class MarkdownDocxConverter:
         style: InlineStyle,
     ) -> None:
         for node in nodes:
+            if isinstance(node, Comment):
+                continue
             if isinstance(node, NavigableString):
                 self._add_text(paragraph, str(node), style)
                 continue
@@ -994,6 +1609,9 @@ class MarkdownDocxConverter:
                 self._add_link(paragraph, node, style)
             elif name == "img":
                 self._add_inline_image(paragraph, node)
+            elif name == "input" and str(node.get("type") or "").lower() == "checkbox":
+                checked = node.has_attr("checked")
+                self._add_text(paragraph, "■" if checked else "□", style)
             elif name == "span" and "math-inline" in tag_classes(node):
                 self._add_inline_formula(
                     paragraph,
@@ -1038,29 +1656,34 @@ class MarkdownDocxConverter:
 
         if href.startswith("#"):
             target = urllib.parse.unquote(href[1:])
-            anchor = self.bookmarks.get(target, make_bookmark_name(target))
-            add_hyperlink(
+            bookmark = self.bookmarks.get(target, make_bookmark_name(target))
+            element = add_hyperlink(
                 paragraph,
                 text,
-                anchor=anchor,
+                anchor=bookmark,
                 color=self.color,
                 font=style.font or self.font,
                 size=style.size or self.font_size,
                 bold=style.bold,
                 italic=style.italic,
             )
-            return
+        else:
+            element = add_hyperlink(
+                paragraph,
+                text,
+                url=href,
+                color=self.color,
+                font=style.font or self.font,
+                size=style.size or self.font_size,
+                bold=style.bold,
+                italic=style.italic,
+            )
 
-        add_hyperlink(
-            paragraph,
-            text,
-            url=href,
-            color=self.color,
-            font=style.font or self.font,
-            size=style.size or self.font_size,
-            bold=style.bold,
-            italic=style.italic,
-        )
+        anchor_id = str(node.get("id") or "")
+        if anchor_id:
+            name = make_bookmark_name(anchor_id)
+            self.bookmarks[anchor_id] = name
+            self._wrap_bookmark(paragraph, element, name)
 
     def _add_inline_formula(
         self, paragraph, latex: str, parent_style: InlineStyle
@@ -1156,7 +1779,6 @@ class MarkdownDocxConverter:
         if not source:
             return None
         source = html.unescape(source)
-        parsed = urllib.parse.urlparse(source)
 
         if source.startswith("data:"):
             match = re.match(
@@ -1170,6 +1792,15 @@ class MarkdownDocxConverter:
             path.write_bytes(base64.b64decode(match.group(2)))
             return path
 
+        if re.match(r"^[A-Za-z]:[\\/]", source):
+            candidate = Path(source)
+            return candidate if candidate.is_file() else None
+
+        parsed = urllib.parse.urlparse(source)
+        if parsed.scheme == "file":
+            candidate = Path(urllib.request.url2pathname(parsed.path))
+            return candidate if candidate.is_file() else None
+
         if parsed.scheme in {"http", "https"}:
             if not self.download_images:
                 raise RuntimeError("remote image downloading is disabled")
@@ -1182,8 +1813,24 @@ class MarkdownDocxConverter:
                 source,
                 headers={"User-Agent": "MarkdownToWordPython/1.0"},
             )
-            with urllib.request.urlopen(request, timeout=20) as response:
-                path.write_bytes(response.read())
+            with urllib.request.urlopen(
+                request, timeout=REMOTE_IMAGE_TIMEOUT_SECONDS
+            ) as response:
+                headers = getattr(response, "headers", None)
+                declared = headers.get("Content-Length") if headers else None
+                if declared is not None and declared.isdigit():
+                    if int(declared) > MAX_REMOTE_IMAGE_BYTES:
+                        raise RuntimeError(
+                            "remote image exceeds the "
+                            f"{MAX_REMOTE_IMAGE_BYTES // (1024 * 1024)} MB limit"
+                        )
+                payload = response.read(MAX_REMOTE_IMAGE_BYTES + 1)
+            if len(payload) > MAX_REMOTE_IMAGE_BYTES:
+                raise RuntimeError(
+                    "remote image exceeds the "
+                    f"{MAX_REMOTE_IMAGE_BYTES // (1024 * 1024)} MB limit"
+                )
+            path.write_bytes(payload)
             return path
 
         local_source = urllib.parse.unquote(parsed.path or source)
@@ -1218,6 +1865,16 @@ class MarkdownDocxConverter:
         insert_at = 1 if paragraph_xml.pPr is not None else 0
         paragraph_xml.insert(insert_at, start)
         paragraph_xml.append(end)
+
+    def _wrap_bookmark(self, paragraph, element, name: str) -> None:
+        start = OxmlElement("w:bookmarkStart")
+        start.set(qn("w:id"), str(self.bookmark_id))
+        start.set(qn("w:name"), name)
+        end = OxmlElement("w:bookmarkEnd")
+        end.set(qn("w:id"), str(self.bookmark_id))
+        self.bookmark_id += 1
+        element.addprevious(start)
+        element.addnext(end)
 
 
 def markdown_to_word(
@@ -1302,58 +1959,26 @@ def markdown_to_word(
         converter.close()
 
 
+FRONT_MATTER_PATTERN = re.compile(
+    r"\A---[ \t]*\n(?P<body>.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL
+)
+FRONT_MATTER_KEY_PATTERN = re.compile(r"^\s*[\w.-]+\s*:", re.MULTILINE)
+
+
 def prepare_markdown(markdown_text: str) -> str:
     text = markdown_text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(
-        r"^(\s*[-+*]\s+)\[([ xX])\](\s+)",
-        lambda match: (
-            f"{match.group(1)}{'☒' if match.group(2).lower() == 'x' else '☐'}"
-            f"{match.group(3)}"
-        ),
-        text,
-        flags=re.MULTILINE,
-    )
-
-    fenced_ranges = find_fenced_code_ranges(text)
-
-    def outside_fence(position: int) -> bool:
-        return not any(start <= position < end for start, end in fenced_ranges)
-
-    block_pattern = re.compile(r"(?ms)^\s*\$\$\s*\n?(.*?)\n?\s*\$\$\s*$")
-    parts: list[str] = []
-    cursor = 0
-    for match in block_pattern.finditer(text):
-        if not outside_fence(match.start()):
-            continue
-        parts.append(text[cursor : match.start()])
-        latex = match.group(1).strip()
-        escaped = html.escape(latex, quote=True)
-        parts.append(f'\n<div class="math-block" data-latex="{escaped}"></div>\n')
-        cursor = match.end()
-    parts.append(text[cursor:])
-    text = "".join(parts)
-
-    fenced_ranges = find_fenced_code_ranges(text)
-    inline_pattern = re.compile(r"(?<!\\)(?<!\$)\$(?!\$)(.+?)(?<!\\)\$(?!\$)")
-    parts = []
-    cursor = 0
-    for match in inline_pattern.finditer(text):
-        if any(start <= match.start() < end for start, end in fenced_ranges):
-            continue
-        parts.append(text[cursor : match.start()])
-        latex = html.escape(match.group(1).strip(), quote=True)
-        parts.append(f'<span class="math-inline" data-latex="{latex}"></span>')
-        cursor = match.end()
-    parts.append(text[cursor:])
-    return "".join(parts)
+    return strip_front_matter(text)
 
 
-def find_fenced_code_ranges(text: str) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    pattern = re.compile(r"(?ms)^(`{3,}|~{3,})[^\n]*\n.*?^\1\s*$")
-    for match in pattern.finditer(text):
-        ranges.append((match.start(), match.end()))
-    return ranges
+def strip_front_matter(text: str) -> str:
+    """Drop a leading YAML front matter block so it never reaches the body."""
+    match = FRONT_MATTER_PATTERN.match(text)
+    if match is None:
+        return text
+    body = match.group("body")
+    if body.strip() and FRONT_MATTER_KEY_PATTERN.search(body) is None:
+        return text
+    return text[match.end() :].lstrip("\n")
 
 
 def resolve_theme_name(value: str) -> str | None:
@@ -1425,7 +2050,10 @@ def set_document_background(document, color: str) -> None:
 
     settings = document.settings.element
     if settings.find(qn("w:displayBackgroundShape")) is None:
-        settings.append(OxmlElement("w:displayBackgroundShape"))
+        settings.insert_element_before(
+            OxmlElement("w:displayBackgroundShape"),
+            *SETTINGS_AFTER_DISPLAY_BACKGROUND_SHAPE,
+        )
 
 
 def set_style_font(style, font: str, size: float, color: str, bold: bool = False) -> None:
@@ -1620,7 +2248,9 @@ def set_keep_table_row_together(row) -> None:
             paragraph.paragraph_format.keep_together = True
 
 
-def calculate_column_widths(html_rows: Sequence[Tag], count: int) -> list[float]:
+def calculate_column_widths(
+    html_rows: Sequence[Tag], count: int, max_width: float = MAX_IMAGE_WIDTH_INCHES
+) -> list[float]:
     weights = [4.0] * count
     for row in html_rows:
         cells = row.find_all(["th", "td"], recursive=False)
@@ -1629,8 +2259,8 @@ def calculate_column_widths(html_rows: Sequence[Tag], count: int) -> list[float]
             visual_length = max(weighted_text_length(line) for line in lines)
             weights[index] = max(weights[index], min(visual_length, 42.0))
     total = sum(weights) or 1.0
-    widths = [MAX_IMAGE_WIDTH_INCHES * weight / total for weight in weights]
-    minimum = min(0.72, MAX_IMAGE_WIDTH_INCHES / count * 0.75)
+    widths = [max_width * weight / total for weight in weights]
+    minimum = min(0.72, max_width / count * 0.75)
     for index, width in enumerate(widths):
         if width < minimum:
             deficit = minimum - width
@@ -1638,7 +2268,7 @@ def calculate_column_widths(html_rows: Sequence[Tag], count: int) -> list[float]
             widest = max(range(count), key=lambda candidate: widths[candidate])
             if widest != index:
                 widths[widest] = max(minimum, widths[widest] - deficit)
-    scale = MAX_IMAGE_WIDTH_INCHES / sum(widths)
+    scale = max_width / sum(widths)
     return [width * scale for width in widths]
 
 
@@ -1718,6 +2348,7 @@ def add_hyperlink(
     run_element.append(text_element)
     hyperlink.append(run_element)
     paragraph._p.append(hyperlink)
+    return hyperlink
 
 
 def normalize_image_extension(value: str) -> str:
