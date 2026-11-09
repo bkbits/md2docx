@@ -276,8 +276,8 @@ def test_large_code_block_keeps_content_and_size_bounded(convert):
     assert "value_119 = 119" in text
 
     document = load(result.output_path)
-    assert len(document.paragraphs) == 2
-    assert len(document.paragraphs[1].runs) <= len(lines) * 3
+    assert len(document.paragraphs) == 1
+    assert len(document.paragraphs[0].runs) <= len(lines) * 3
     assert len(document_xml(result.output_path)) < 150_000
 
 

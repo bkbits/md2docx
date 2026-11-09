@@ -19,7 +19,7 @@ def test_unknown_language_falls_back_to_text_lexer(convert):
     assert result.code_blocks == 1
     assert "value = 1" in full_text(result.output_path)
     document = load(result.output_path)
-    assert document.paragraphs[0].text == "NOSUCHLANG"
+    assert document.paragraphs[0].text == "value = 1"
 
 
 def test_unlabeled_fence_has_no_label_paragraph(convert):
@@ -41,15 +41,15 @@ def test_fence_with_extra_info_string(convert):
     result = convert('```python title="demo" linenos\nvalue = 3\n```\n')
     document = load(result.output_path)
 
-    assert document.paragraphs[0].text == "PYTHON"
-    assert "value = 3" in document.paragraphs[1].text
+    assert document.paragraphs[0].text == "value = 3"
 
 
-def test_language_label_is_uppercased(convert):
+def test_language_label_is_not_written(convert):
     result = convert("```JavaScript\nconst a = 1;\n```\n")
     document = load(result.output_path)
 
-    assert document.paragraphs[0].text == "JAVASCRIPT"
+    assert len(document.paragraphs) == 1
+    assert document.paragraphs[0].text == "const a = 1;"
 
 
 def test_html_entities_inside_code_are_literal(convert):
@@ -66,14 +66,14 @@ def test_tabs_are_preserved_as_tab_stops(convert):
     result = convert("```python\ndef f():\n\treturn 1\n```\n")
     document = load(result.output_path)
 
-    assert "\treturn 1" in document.paragraphs[1].text
+    assert "\treturn 1" in document.paragraphs[0].text
 
 
 def test_trailing_whitespace_inside_code_is_preserved(convert):
     result = convert("```text\nvalue   \nnext\n```\n")
     document = load(result.output_path)
 
-    assert document.paragraphs[1].text == "value   \nnext"
+    assert document.paragraphs[0].text == "value   \nnext"
 
 
 def test_long_single_line_code(convert):
@@ -89,8 +89,8 @@ def test_very_long_code_block_keeps_structure(convert):
     document = load(result.output_path)
 
     assert result.code_blocks == 1
-    assert len(document.paragraphs) == 2
-    assert document.paragraphs[1].text.count("\n") == len(lines) - 1
+    assert len(document.paragraphs) == 1
+    assert document.paragraphs[0].text.count("\n") == len(lines) - 1
 
 
 def test_code_block_without_pygments_falls_back(convert, monkeypatch):
@@ -100,7 +100,7 @@ def test_code_block_without_pygments_falls_back(convert, monkeypatch):
 
     assert result.code_blocks == 1
     document = load(result.output_path)
-    assert document.paragraphs[1].text == "value = 1"
+    assert document.paragraphs[0].text == "value = 1"
 
 
 def test_indented_code_block_is_rendered_as_code(convert):
@@ -137,13 +137,13 @@ def test_code_block_inside_blockquote(convert):
     assert "quoted code" in full_text(result.output_path)
 
 
-def test_mermaid_fallback_uses_code_block_label(convert):
+def test_mermaid_fallback_has_no_label(convert):
     result = convert("```mermaid\ngraph TD\n  A --> B\n```\n", mermaid_mode="skip")
     document = load(result.output_path)
 
     assert result.warnings == []
-    assert document.paragraphs[0].text == "MERMAID"
-    assert "graph TD" in document.paragraphs[1].text
+    assert len(document.paragraphs) == 1
+    assert "graph TD" in document.paragraphs[0].text
 
 
 @pytest.mark.parametrize("language", ["python", "javascript", "json", "bash", "sql"])

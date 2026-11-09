@@ -14,7 +14,7 @@
 - Supports ordered, unordered, and nested lists plus task lists (checkboxes use `■`/`□`, so no special symbol font is required); blockquotes, code blocks, and tables inside list items are preserved
 - Supports GFM tables with themed header rows, zebra striping, and column-width estimation; tables nested inside cells become real Word nested tables
 - Supports blockquotes, horizontal rules, footnotes (with clickable references and backlinks), and internal/external links
-- Supports fenced code blocks with Pygments syntax highlighting (monochrome under the `gray-background` theme); whole-block lexing keeps highlighting consistent across multi-line strings and comments
+- Supports fenced code blocks with Pygments syntax highlighting (monochrome under the `gray-background` theme); whole-block lexing keeps highlighting consistent across multi-line strings and comments; the fence language only selects the lexer and is never written as a `TEXT`, `RUST`, or similar label paragraph
 - Code blocks use a single paragraph with in-paragraph line breaks: `document.xml` for 200 lines of code drops from about 470 KB to about 125 KB
 - Supports local images, `file://` images, remote images, Base64 images, and SVG conversion
 - Renders Mermaid diagrams to PNG and embeds them; multiple diagrams share one CLI invocation (and one browser), falling back to per-diagram retries on failure

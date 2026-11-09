@@ -278,15 +278,14 @@ def test_code_block_keeps_indentation(convert):
     result = convert("```python\ndef f():\n    return 1\n```\n")
     document = load(result.output_path)
 
-    assert document.paragraphs[0].text == "PYTHON"
-    assert "\n    return 1" in document.paragraphs[1].text
+    assert document.paragraphs[0].text == "def f():\n    return 1"
 
 
 def test_multiline_string_keeps_single_highlighting(convert):
     source = '```python\ntext = """first\nsecond\nthird\"""\n```\n'
     result = convert(source, color="classic-blue")
     document = load(result.output_path)
-    code_paragraph = document.paragraphs[1]
+    code_paragraph = document.paragraphs[0]
 
     def color_of(needle: str):
         for run in code_paragraph.runs:
@@ -299,14 +298,14 @@ def test_multiline_string_keeps_single_highlighting(convert):
     assert color_of("third") == "A31515"
 
 
-def test_code_block_label_and_body_spacing(convert):
+def test_code_block_body_spacing(convert):
     result = convert("```bash\necho hi\n```\n")
     document = load(result.output_path)
 
-    assert document.paragraphs[0].text == "BASH"
-    body = document.paragraphs[1]
+    assert len(document.paragraphs) == 1
+    body = document.paragraphs[0]
     assert body.text == "echo hi"
-    assert body.paragraph_format.space_before.pt == 0
+    assert body.paragraph_format.space_before.pt == 5
 
 
 def test_empty_code_block_still_renders(convert):

@@ -1270,20 +1270,15 @@ class MarkdownDocxConverter:
         self._render_code_block(source, language)
 
     def _render_code_block(self, source: str, language: str) -> None:
-        if language:
-            label = self.document.add_paragraph()
-            label.paragraph_format.space_before = Pt(5)
-            label.paragraph_format.space_after = Pt(2)
-            run = label.add_run(language.upper())
-            apply_run_font(run, self.font, max(8, self.font_size - 2), self.color)
-            run.bold = True
-
+        # The fence language only drives syntax highlighting. It is never
+        # emitted as a label paragraph, so no "TEXT"/"RUST" text leaks into
+        # the document.
         text = source.rstrip("\n")
         base_size = max(8, self.font_size - 1)
         fallback_style = InlineStyle(code=True, size=base_size)
 
         paragraph = self.document.add_paragraph()
-        paragraph.paragraph_format.space_before = Pt(0 if language else 5)
+        paragraph.paragraph_format.space_before = Pt(5)
         paragraph.paragraph_format.space_after = Pt(5)
         paragraph.paragraph_format.line_spacing = 1.0
         paragraph.paragraph_format.left_indent = Inches(0.12)
